@@ -600,3 +600,127 @@ async def auto_adjust(request: Request,
     out_path, url = save_image_bytes_and_get_url(out_bytes, request, prefix="auto", ext="png")
     increment_usage(api_key)
     return JSONResponse(content=make_success("Auto-adjust applied", url, user))
+@app.get("/admin/users")
+def list_all_users(x_admin_key: str = Header(None)):
+    """
+    🔒 Admin-only endpoint — Lists all registered API users.
+    Requires header: x-admin-key
+    Example curl:
+    curl -X GET http://127.0.0.1:8000/admin/users \
+      -H "x-admin-key: YOUR_ADMIN_SECRET_KEY"
+    """
+    if x_admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized — Invalid admin key")
+
+    try:
+        users = load_users()
+        result = []
+
+        for api_key, info in users.items():
+            result.append({
+                "api_key": api_key,
+                "plan": info.get("plan"),
+                "limit": info.get("limit"),
+                "usage": info.get("usage"),
+                "remaining": (
+                    None if info.get("limit") is None else
+                    max(0, info["limit"] - info["usage"])
+                ),
+                "expiry": info.get("expiry"),
+                "created_at": info.get("created_at")
+            })
+
+        return {
+            "status": "success",
+            "total_users": len(result),
+            "users": result
+        }
+
+    except Exception as e:
+        raise HTTPException(st`atus_code=500, detail=f"Error loading users: {str(e)}")
+@app.post("/admin/reset-usage")
+def admin_reset_usage(
+    api_key: str = Form(...),
+    x_admin_key: str = Header(None)
+):
+    """
+    🔒 Admin-only — Reset usage count for a user.
+    Example:
+    curl -X POST http://127.0.0.1:8000/admin/reset-usage \
+      -H "x-admin-key: YOUR_ADMIN_SECRET_KEY" \
+      -F "api_key=USER_API_KEY"
+    """
+    if x_admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized — Invalid admin key")
+
+    users = load_users()
+    if api_key not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    users[api_key]["usage"] = 0
+    save_users(users)
+    return {"status": "success", "message": f"Usage reset for {api_key}"}
+
+
+@app.post("/admin/delete-user")
+def admin_delete_user(
+    api_key: str = Form(...),
+    x_admin_key: str = Header(None)
+):
+    """
+    🔒 Admin-only — Delete a user's API key.
+    Example:
+    curl -X POST http://127.0.0.1:8000/admin/delete-user \
+      -H "x-admin-key: YOUR_ADMIN_SECRET_KEY" \
+      -F "api_key=USER_API_KEY"
+    """
+    if x_admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized — Invalid admin key")
+
+    users = load_users()
+    if api_key not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    del users[api_key]
+    save_users(users)
+    return {"status": "success", "message": f"Deleted API key: {api_key}"}
+
+
+@app.post("/admin/upgrade")
+def admin_upgrade_user(
+    api_key: str = Form(...),
+    new_plan: str = Form("paid"),
+    x_admin_key: str = Header(None)
+):
+    """
+    🔒 Admin-only — Upgrade or downgrade a user’s plan.
+    Example:
+    curl -X POST http://127.0.0.1:8000/admin/upgrade \
+      -H "x-admin-key: YOUR_ADMIN_SECRET_KEY" \
+      -F "api_key=USER_API_KEY" \
+      -F "new_plan=paid"
+    """
+    if x_admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized — Invalid admin key")
+
+    users = load_users()
+    if api_key not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if new_plan not in ["free", "paid"]:
+        raise HTTPException(status_code=400, detail="Invalid plan type. Use 'free' or 'paid'.")
+
+    user = users[api_key]
+    now = datetime.datetime.now()
+
+    if new_plan == "free":
+        user["plan"] = "free"
+        user["limit"] = 10
+        user["expiry"] = (now + datetime.timedelta(days=30)).isoformat()
+    else:
+        user["plan"] = "paid"
+        user["limit"] = None
+        user["expiry"] = (now + datetime.timedelta(days=365)).isoformat()
+
+    save_users(users)
+    return {"status": "success", "message": f"User {api_key} upgraded to {new_plan} plan"}
