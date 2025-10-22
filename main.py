@@ -726,3 +726,43 @@ def admin_upgrade_user(
 
     save_users(users)
     return {"status": "success", "message": f"User {api_key} upgraded to {new_plan} plan"}
+@app.get("/admin/stats")
+def admin_stats(x_admin_key: str = Header(None)):
+    """
+    🔒 Admin-only — Returns overall API usage stats.
+    Requires header: x-admin-key
+    Example:
+    curl -X GET http://127.0.0.1:8000/admin/stats \
+      -H "x-admin-key: YOUR_ADMIN_SECRET_KEY"
+    """
+    if x_admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized — Invalid admin key")
+
+    try:
+        users = load_users()
+        total_users = len(users)
+        active_users = 0
+        expired_users = 0
+        total_usage = 0
+
+        now = datetime.datetime.now()
+
+        for info in users.values():
+            total_usage += info.get("usage", 0)
+            expiry = datetime.datetime.fromisoformat(info.get("expiry"))
+            if expiry > now:
+                active_users += 1
+            else:
+                expired_users += 1
+
+        return {
+            "status": "success",
+            "total_users": total_users,
+            "active_users": active_users,
+            "expired_users": expired_users,
+            "total_requests": total_usage,
+            "timestamp": now.isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating stats: {str(e)}")
