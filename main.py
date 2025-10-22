@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageDraw, ImageFont
 import zipfile
 from fastapi import Form, Header
 
+
 # auth_utils is expected to exist alongside this file (users.json management)
 # If you haven't created it yet, use the earlier provided auth_utils.py implementation.
 from auth_utils import load_users, save_users, validate_key, increment_usage, register_key, get_usage_info
@@ -637,7 +638,8 @@ def list_all_users(x_admin_key: str = Header(None)):
         }
 
     except Exception as e:
-        raise HTTPException(st`atus_code=500, detail=f"Error loading users: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error loading users: {str(e)}")
+
 @app.post("/admin/reset-usage")
 def admin_reset_usage(
     api_key: str = Form(...),
