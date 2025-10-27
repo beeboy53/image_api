@@ -11,6 +11,18 @@ from rembg import remove
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageDraw, ImageFont, ExifTags
 import zipfile
 from fastapi import Form, Header
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+# ✅ Enable CORS for local frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # You can restrict this later
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # auth_utils is expected to exist alongside this file (users.json management)
@@ -57,6 +69,15 @@ def ensure_allowed(file: UploadFile):
         raise HTTPException(status_code=400, detail="Invalid image type! Allowed: jpeg, png, webp")
 
 # -------------------- Admin: Register Key --------------------
+
+@app.get("/")
+def home():
+    return {
+        "message": "🚀 AI Image Processing API is running successfully!",
+        "docs_url": "http://127.0.0.1:8000/docs",
+        "version": "1.0.0",
+        "status": "active"
+    }
 
 
 @app.post("/register-key")
@@ -120,48 +141,72 @@ def usage_info(request: Request, x_api_key: str = Header(None)):
  
 # -------------------- Remove BG --------------------
 @app.post("/remove-bg")
-async def remove_bg(request: Request,
-                    api_key: str = Header(..., alias="x-api-key"),
-                    file: UploadFile = File(...),
-                    background_color: str = Form(None),
-                    bg_image: UploadFile = File(None)):
+async def remove_bg(
+    request: Request,
+    api_key: str = Header(..., alias="x-api-key"),
+    file: UploadFile = File(...),
+    background_color: str = Form(None),
+    bg_image: UploadFile = File(None)
+):
+    """
+    🧠 Remove background from image.
+    Optional:
+      - background_color (e.g., "#ffffff" or "red")
+      - bg_image (another image to replace the background)
+    If neither is provided → transparent background (default)
+    """
+
+    # ✅ Validate user & file
     user = validate_key(api_key)
     ensure_allowed(file)
     contents = await file.read()
 
-    # Save original
-    in_path = os.path.join(UPLOADS_DIR, f"{uuid.uuid4().hex}_{file.filename}")
-    with open(in_path, "wb") as f:
+    # ✅ Save original file
+    input_filename = f"{uuid.uuid4().hex}_{file.filename}"
+    input_path = os.path.join(UPLOADS_DIR, input_filename)
+    with open(input_path, "wb") as f:
         f.write(contents)
 
-    # Remove background (rembg returns PNG bytes)
+    # ✅ Remove background (using rembg)
     try:
         output = remove(contents)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Background removal error: {e}")
+        raise HTTPException(status_code=500, detail=f"Background removal failed: {str(e)}")
 
+    # ✅ Convert to image for post-processing
     image_no_bg = Image.open(BytesIO(output)).convert("RGBA")
 
-    # Replace background if requested
-    if bg_image:
-        bg_contents = await bg_image.read()
-        bg = Image.open(BytesIO(bg_contents)).convert("RGBA")
-        bg = bg.resize(image_no_bg.size)
-        final = Image.alpha_composite(bg, image_no_bg)
-    elif background_color:
-        bg = Image.new("RGBA", image_no_bg.size, background_color)
-        final = Image.alpha_composite(bg, image_no_bg)
-    else:
-        final = image_no_bg
+    final_image = image_no_bg  # Default: transparent output
 
+    # ✅ Replace background (color or another image)
+    if bg_image is not None and hasattr(bg_image, "read"):
+        try:
+            bg_contents = await bg_image.read()
+            if bg_contents:  # Only if actual file was uploaded
+                bg = Image.open(BytesIO(bg_contents)).convert("RGBA")
+                bg = bg.resize(image_no_bg.size)
+                final_image = Image.alpha_composite(bg, image_no_bg)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid background image: {str(e)}")
+
+    elif background_color:
+        try:
+            bg = Image.new("RGBA", image_no_bg.size, background_color)
+            final_image = Image.alpha_composite(bg, image_no_bg)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid background color: {str(e)}")
+
+    # ✅ Save and serve final image
     out_buf = BytesIO()
-    final.save(out_buf, format="PNG")
+    final_image.save(out_buf, format="PNG")
     out_buf.seek(0)
     out_bytes = out_buf.read()
 
     out_path, url = save_image_bytes_and_get_url(out_bytes, request, prefix="no_bg", ext="png")
     increment_usage(api_key)
-    return JSONResponse(content=make_success("Background removed", url, user))
+
+    return JSONResponse(content=make_success("✅ Background removed successfully", url, user))
+
 
 # -------------------- Optimize --------------------
 @app.post("/optimize")
